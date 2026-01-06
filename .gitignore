@@ -35,4 +35,4 @@ logs/
 Thumbs.db
 
 # Application
-application.properties
+#application.properties
