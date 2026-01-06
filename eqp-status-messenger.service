@@ -1,0 +1,25 @@
+[Unit]
+Description=Equipment Status Messenger Service
+After=network.target
+
+[Service]
+Type=simple
+User=your_user
+Group=your_group
+WorkingDirectory=/opt/eqp-status-messenger
+ExecStart=/usr/bin/java -jar /opt/eqp-status-messenger/EqpStatusMessenger-1.0.0-jar-with-dependencies.jar
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# ログディレクトリのパーミッション
+RuntimeDirectory=eqp-status-messenger
+RuntimeDirectoryMode=0755
+
+# セキュリティ設定
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
