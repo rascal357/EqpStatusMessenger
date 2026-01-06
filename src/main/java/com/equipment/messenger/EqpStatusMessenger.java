@@ -57,10 +57,12 @@ public class EqpStatusMessenger {
 
     /**
      * メインループを実行
+     * SELECT FOR UPDATE NOWAITによる排他制御を使用
      */
     public void run() {
         logger.info("===== EqpStatusMessenger 実行開始 =====");
         logger.info("処理間隔: {}秒", config.getIntervalSeconds());
+        logger.info("排他制御: SELECT FOR UPDATE NOWAIT使用");
 
         // シャットダウンフックを登録
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -68,25 +70,26 @@ public class EqpStatusMessenger {
             running = false;
         }));
 
-        Date lastTimestamp = null;
-
         while (running) {
+            Connection conn = null;
             try {
-                // RTI_TIMESTAMPテーブルからタイムスタンプを取得（初回は初期化）
-                if (lastTimestamp == null) {
-                    lastTimestamp = dbManager.getOrInitializeTimestamp();
-                }
+                // トランザクション開始
+                conn = dbManager.beginTransaction();
+
+                // RTI_TIMESTAMPテーブルからタイムスタンプを排他ロック付きで取得
+                Date lastTimestamp = dbManager.getOrInitializeTimestampWithLock(conn);
 
                 // 前回のタイムスタンプ以降に更新された装置ステータスを取得
-                List<EquipmentStatus> statusList = dbManager.getUpdatedEquipmentStatus(lastTimestamp);
+                List<EquipmentStatus> statusList = dbManager.getUpdatedEquipmentStatus(conn, lastTimestamp);
+
+                // 最新のタイムスタンプを記録
+                Date maxTimestamp = lastTimestamp;
 
                 if (statusList.isEmpty()) {
                     logger.debug("更新された装置ステータスはありません");
+                    // データがない場合はlastTimestampのまま
                 } else {
                     logger.info("{}件の装置ステータスを処理します", statusList.size());
-
-                    // 最新のタイムスタンプを記録
-                    Date maxTimestamp = lastTimestamp;
 
                     // 各装置ステータスをActiveMQ Artemisに送信
                     for (EquipmentStatus status : statusList) {
@@ -97,27 +100,52 @@ public class EqpStatusMessenger {
                             maxTimestamp = status.getTimestampTime();
                         }
                     }
-
-                    // RTI_TIMESTAMPテーブルを更新
-                    dbManager.updateTimestamp(maxTimestamp);
-                    lastTimestamp = maxTimestamp;
-
-                    logger.info("処理完了 - 次回チェックタイムスタンプ: {}", lastTimestamp);
                 }
+
+                // RTI_TIMESTAMPテーブルを更新してコミット（データがない場合もlastTimestampで更新）
+                dbManager.updateTimestampAndCommit(conn, maxTimestamp);
+                dbManager.closeConnection(conn);
+                conn = null;
+
+                logger.info("処理完了 - 次回チェックタイムスタンプ: {}", maxTimestamp);
 
                 // 指定秒数スリープ
                 Thread.sleep(config.getIntervalSeconds() * 1000L);
 
             } catch (SQLException e) {
-                logger.error("データベースエラーが発生しました", e);
-                try {
-                    Thread.sleep(config.getIntervalSeconds() * 1000L);
-                } catch (InterruptedException ie) {
-                    logger.warn("スリープが中断されました", ie);
-                    running = false;
+                // ORA-00054: resource busy and acquire with NOWAIT specified
+                if (e.getErrorCode() == 54) {
+                    logger.warn("他のプロセスが実行中のため、ロックを取得できませんでした。30秒後に再試行します。");
+                    dbManager.rollback(conn);
+                    dbManager.closeConnection(conn);
+                    conn = null;
+
+                    try {
+                        // 30秒待って再試行
+                        Thread.sleep(30 * 1000L);
+                    } catch (InterruptedException ie) {
+                        logger.warn("スリープが中断されました", ie);
+                        running = false;
+                    }
+                } else {
+                    logger.error("データベースエラーが発生しました", e);
+                    dbManager.rollback(conn);
+                    dbManager.closeConnection(conn);
+                    conn = null;
+
+                    try {
+                        Thread.sleep(config.getIntervalSeconds() * 1000L);
+                    } catch (InterruptedException ie) {
+                        logger.warn("スリープが中断されました", ie);
+                        running = false;
+                    }
                 }
             } catch (JMSException e) {
                 logger.error("メッセージング エラーが発生しました", e);
+                dbManager.rollback(conn);
+                dbManager.closeConnection(conn);
+                conn = null;
+
                 try {
                     Thread.sleep(config.getIntervalSeconds() * 1000L);
                 } catch (InterruptedException ie) {
@@ -126,14 +154,26 @@ public class EqpStatusMessenger {
                 }
             } catch (InterruptedException e) {
                 logger.warn("スリープが中断されました", e);
+                dbManager.rollback(conn);
+                dbManager.closeConnection(conn);
                 running = false;
             } catch (Exception e) {
                 logger.error("予期しないエラーが発生しました", e);
+                dbManager.rollback(conn);
+                dbManager.closeConnection(conn);
+                conn = null;
+
                 try {
                     Thread.sleep(config.getIntervalSeconds() * 1000L);
                 } catch (InterruptedException ie) {
                     logger.warn("スリープが中断されました", ie);
                     running = false;
+                }
+            } finally {
+                // 念のため、Connectionが残っていればクローズ
+                if (conn != null) {
+                    dbManager.rollback(conn);
+                    dbManager.closeConnection(conn);
                 }
             }
         }
