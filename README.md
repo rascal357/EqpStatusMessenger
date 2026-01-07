@@ -86,7 +86,16 @@ mvn clean package
 
 ## 設定
 
-`src/main/resources/application.properties` を編集してください。
+### 設定ファイルの読み込み優先順位
+
+アプリケーションは以下の優先順位で設定を読み込みます：
+
+1. **./config/application.properties** (外部ファイル) ← 最優先
+2. **./application.properties** (カレントディレクトリ)
+3. **クラスパス内のapplication.properties** (jarファイル内)
+4. **システムプロパティ** (`-Ddb.url=...` などのコマンドライン引数) ← 最終的な上書き
+
+### 設定項目
 
 ```properties
 # データベース設定
@@ -105,6 +114,73 @@ artemis.queue=E10StateChange
 app.interval.seconds=60
 ```
 
+### 開発環境での設定
+
+開発時は `src/main/resources/application.properties` を直接編集してください。
+
+```bash
+vi src/main/resources/application.properties
+mvn clean package
+java -jar target/EqpStatusMessenger-1.0.0-jar-with-dependencies.jar
+```
+
+### 本番環境での設定（推奨）
+
+**外部設定ファイルを使用することで、jarファイルを再ビルドせずに設定変更が可能です。**
+
+#### 方法1: configディレクトリを使用（推奨）
+
+```bash
+# configディレクトリを作成
+mkdir config
+
+# 設定ファイルをコピーして編集
+cp src/main/resources/application.properties config/
+vi config/application.properties
+
+# 実行（config/application.propertiesが自動的に読み込まれる）
+java -jar target/EqpStatusMessenger-1.0.0-jar-with-dependencies.jar
+```
+
+#### 方法2: カレントディレクトリに配置
+
+```bash
+# カレントディレクトリに配置
+cp src/main/resources/application.properties .
+vi application.properties
+
+# 実行
+java -jar target/EqpStatusMessenger-1.0.0-jar-with-dependencies.jar
+```
+
+#### 方法3: システムプロパティで上書き
+
+特定の設定だけをコマンドラインで上書きできます（パスワードなど機密情報に便利）。
+
+```bash
+# パスワードだけを上書き
+java -Ddb.password=prod_password \
+     -Dartemis.password=prod_password \
+     -jar target/EqpStatusMessenger-1.0.0-jar-with-dependencies.jar
+
+# 複数の設定を上書き
+java -Ddb.url=jdbc:oracle:thin:@prod-server:1521:ORCL \
+     -Ddb.username=prod_user \
+     -Ddb.password=prod_pass \
+     -Dartemis.url=tcp://prod-artemis:61616 \
+     -jar target/EqpStatusMessenger-1.0.0-jar-with-dependencies.jar
+```
+
+### 設定変更時の運用
+
+| 方法 | 設定変更後の手順 | 再ビルド |
+|------|------------------|----------|
+| jarファイル内 | `mvn clean package` で再ビルド | 必要 ✗ |
+| 外部ファイル (config/) | 設定ファイルを編集してアプリ再起動 | 不要 ✓ |
+| システムプロパティ | 起動コマンドを変更して再起動 | 不要 ✓ |
+
+**推奨**: 本番環境では外部設定ファイル（config/application.properties）を使用し、機密情報はシステムプロパティで上書きする方法が最も柔軟です。
+
 ## ローカルでの実行
 
 ```bash
@@ -119,13 +195,17 @@ java -jar target/EqpStatusMessenger-1.0.0-jar-with-dependencies.jar
 ```bash
 # アプリケーション用ディレクトリを作成
 sudo mkdir -p /opt/eqp-status-messenger
+sudo mkdir -p /opt/eqp-status-messenger/config
 sudo mkdir -p /opt/eqp-status-messenger/logs
 
 # JARファイルをコピー
 sudo cp target/EqpStatusMessenger-1.0.0-jar-with-dependencies.jar /opt/eqp-status-messenger/
 
-# 設定ファイルをコピー（JARに含まれていない場合）
-sudo cp src/main/resources/application.properties /opt/eqp-status-messenger/
+# 外部設定ファイルをコピー（推奨）
+sudo cp src/main/resources/application.properties /opt/eqp-status-messenger/config/
+
+# 本番環境用に設定を編集
+sudo vi /opt/eqp-status-messenger/config/application.properties
 
 # 権限設定
 sudo chown -R your_user:your_group /opt/eqp-status-messenger
@@ -196,16 +276,38 @@ ActiveMQ Artemisに送信されるメッセージ：
 
 ## トラブルシューティング
 
+### 設定ファイルが読み込まれない
+
+アプリケーション起動時のログで、どの設定ファイルが読み込まれたか確認できます：
+
+```
+設定ファイルを読み込みました: /opt/eqp-status-messenger/config/application.properties
+```
+
+または
+
+```
+設定ファイルを読み込みました (クラスパス): application.properties
+```
+
+システムプロパティで上書きした場合は以下のように表示されます：
+
+```
+システムプロパティで上書き: db.url = jdbc:oracle:thin:@prod-server:1521:ORCL
+システムプロパティで上書き: db.password = ********
+```
+
 ### データベース接続エラー
 
-- `application.properties` のデータベース設定を確認
+- 設定ファイル（`config/application.properties` または jarファイル内）のデータベース設定を確認
 - Oracle JDBCドライバーが正しくインストールされているか確認
 - ネットワーク接続とファイアウォール設定を確認
+- システムプロパティで上書きしている場合は、コマンドライン引数を確認
 
 ### ActiveMQ Artemis接続エラー
 
 - Artemisサーバーが起動しているか確認
-- `application.properties` のArtemis設定を確認
+- 設定ファイルまたはシステムプロパティのArtemis設定を確認
 - ユーザー名とパスワードが正しいか確認
 
 ### サービスが起動しない
