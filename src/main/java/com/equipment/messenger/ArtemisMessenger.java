@@ -48,28 +48,121 @@ public class ArtemisMessenger implements AutoCloseable {
 
     /**
      * 装置ステータスをE10StateChangeキューに送信
+     * 失敗時は自動的に再接続を試みる
      */
     public void sendEquipmentStatus(EquipmentStatus status) throws JMSException {
-        if (session == null || producer == null) {
-            throw new IllegalStateException("Messenger is not initialized");
+        int maxRetries = 3;
+        JMSException lastException = null;
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                // 接続が初期化されていない場合は再接続
+                if (session == null || producer == null) {
+                    logger.warn("接続が初期化されていません。再接続を試みます... (試行 {}/{})", attempt, maxRetries);
+                    reconnect();
+                }
+
+                // テキストメッセージを作成
+                String messageText = "currentState=\"" + status.getStatus() + "\"";
+                TextMessage message = session.createTextMessage(messageText);
+
+                // JMSReplyToヘッダーにEquipmentIdを設定
+                String replyToText = "EquipmentId=" + status.getEqpId();
+                Queue replyToQueue = session.createQueue(replyToText);
+                message.setJMSReplyTo(replyToQueue);
+
+                // メッセージを送信
+                producer.send(message);
+
+                logger.info("メッセージ送信 - EQPID: {}, STATUS: {}, TIME: {}",
+                        status.getEqpId(),
+                        status.getStatus(),
+                        status.getTimestampTime());
+
+                return; // 成功したら終了
+
+            } catch (JMSException e) {
+                lastException = e;
+                logger.warn("メッセージ送信失敗 (試行 {}/{}): {}", attempt, maxRetries, e.getMessage());
+
+                if (attempt < maxRetries) {
+                    try {
+                        // 古い接続をクリーンアップ
+                        closeQuietly();
+
+                        // バックオフ（指数関数的に待機時間を増やす）
+                        long backoffMs = 1000L * attempt;
+                        logger.info("{}ms後に再接続を試みます...", backoffMs);
+                        Thread.sleep(backoffMs);
+
+                        // 再接続
+                        reconnect();
+
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        logger.error("再接続待機中に中断されました", ie);
+                        throw e;
+                    } catch (Exception re) {
+                        logger.error("再接続に失敗しました", re);
+                    }
+                }
+            }
         }
 
-        // テキストメッセージを作成
-        String messageText = "currentState=\"" + status.getStatus() + "\"";
-        TextMessage message = session.createTextMessage(messageText);
+        // すべてのリトライが失敗した場合
+        logger.error("{}回の試行後もメッセージ送信に失敗しました", maxRetries);
+        throw lastException;
+    }
 
-        // JMSReplyToヘッダーにEquipmentIdを設定
-        String replyToText = "EquipmentId=" + status.getEqpId();
-        Queue replyToQueue = session.createQueue(replyToText);
-        message.setJMSReplyTo(replyToQueue);
+    /**
+     * 再接続を試みる
+     */
+    private void reconnect() throws JMSException {
+        logger.info("ActiveMQ Artemis再接続を試みます: {}", brokerUrl);
+        closeQuietly();
+        initialize();
+        logger.info("ActiveMQ Artemis再接続成功");
+    }
 
-        // メッセージを送信
-        producer.send(message);
+    /**
+     * 例外を握りつぶしてクローズ（再接続時に使用）
+     */
+    private void closeQuietly() {
+        try {
+            if (producer != null) {
+                producer.close();
+                producer = null;
+            }
+        } catch (Exception e) {
+            logger.debug("Producer クローズ時のエラー（無視）: {}", e.getMessage());
+        }
 
-        logger.info("メッセージ送信 - EQPID: {}, STATUS: {}, TIME: {}",
-                status.getEqpId(),
-                status.getStatus(),
-                status.getTimestampTime());
+        try {
+            if (session != null) {
+                session.close();
+                session = null;
+            }
+        } catch (Exception e) {
+            logger.debug("Session クローズ時のエラー（無視）: {}", e.getMessage());
+        }
+
+        try {
+            if (connection != null) {
+                connection.close();
+                connection = null;
+            }
+        } catch (Exception e) {
+            logger.debug("Connection クローズ時のエラー（無視）: {}", e.getMessage());
+        }
+
+        try {
+            if (connectionFactory != null) {
+                connectionFactory.close();
+                connectionFactory = null;
+            }
+        } catch (Exception e) {
+            logger.debug("ConnectionFactory クローズ時のエラー（無視）: {}", e.getMessage());
+        }
     }
 
     /**
