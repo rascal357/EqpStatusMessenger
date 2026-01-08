@@ -70,7 +70,9 @@ public class Config {
         String[] keys = {
             "db.url", "db.username", "db.password", "db.equipment.table",
             "artemis.url", "artemis.username", "artemis.password", "artemis.queue",
-            "app.interval.seconds"
+            "app.interval.seconds",
+            "mail.notification.enabled", "mail.smtp.host", "mail.smtp.port", "mail.smtp.auth",
+            "mail.smtp.starttls.enable", "mail.username", "mail.password", "mail.from", "mail.to"
         };
 
         for (String key : keys) {
@@ -117,5 +119,41 @@ public class Config {
 
     public int getIntervalSeconds() {
         return Integer.parseInt(properties.getProperty("app.interval.seconds", "60"));
+    }
+
+    public boolean isMailNotificationEnabled() {
+        return Boolean.parseBoolean(properties.getProperty("mail.notification.enabled", "false"));
+    }
+
+    public String getMailSmtpHost() {
+        return properties.getProperty("mail.smtp.host");
+    }
+
+    public int getMailSmtpPort() {
+        return Integer.parseInt(properties.getProperty("mail.smtp.port", "587"));
+    }
+
+    public boolean isMailSmtpAuth() {
+        return Boolean.parseBoolean(properties.getProperty("mail.smtp.auth", "true"));
+    }
+
+    public boolean isMailSmtpStartTlsEnable() {
+        return Boolean.parseBoolean(properties.getProperty("mail.smtp.starttls.enable", "true"));
+    }
+
+    public String getMailUsername() {
+        return properties.getProperty("mail.username");
+    }
+
+    public String getMailPassword() {
+        return properties.getProperty("mail.password");
+    }
+
+    public String getMailFrom() {
+        return properties.getProperty("mail.from");
+    }
+
+    public String getMailTo() {
+        return properties.getProperty("mail.to");
     }
 }

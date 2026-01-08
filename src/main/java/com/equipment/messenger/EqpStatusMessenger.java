@@ -18,6 +18,7 @@ public class EqpStatusMessenger {
     private final Config config;
     private final DatabaseManager dbManager;
     private final ArtemisMessenger artemisMessenger;
+    private final EmailService emailService;
     private volatile boolean running = true;
 
     public EqpStatusMessenger(Config config) {
@@ -36,6 +37,8 @@ public class EqpStatusMessenger {
                 config.getArtemisPassword(),
                 config.getArtemisQueue()
         );
+
+        this.emailService = new EmailService(config);
     }
 
     /**
@@ -46,11 +49,18 @@ public class EqpStatusMessenger {
 
         // データベース接続テスト
         if (!dbManager.testConnection()) {
-            throw new Exception("データベース接続に失敗しました");
+            Exception dbException = new Exception("データベース接続に失敗しました");
+            emailService.sendDatabaseConnectionFailureNotification(dbException);
+            throw dbException;
         }
 
         // ActiveMQ Artemis接続初期化
-        artemisMessenger.initialize();
+        try {
+            artemisMessenger.initialize();
+        } catch (JMSException e) {
+            emailService.sendArtemisConnectionFailureNotification(e);
+            throw e;
+        }
 
         logger.info("===== 初期化完了 =====");
     }
@@ -129,6 +139,7 @@ public class EqpStatusMessenger {
                     }
                 } else {
                     logger.error("データベースエラーが発生しました", e);
+                    emailService.sendDatabaseConnectionFailureNotification(e);
                     dbManager.rollback(conn);
                     dbManager.closeConnection(conn);
                     conn = null;
@@ -142,6 +153,7 @@ public class EqpStatusMessenger {
                 }
             } catch (JMSException e) {
                 logger.error("メッセージング エラーが発生しました", e);
+                emailService.sendArtemisConnectionFailureNotification(e);
                 dbManager.rollback(conn);
                 dbManager.closeConnection(conn);
                 conn = null;
